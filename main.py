@@ -39,7 +39,7 @@ class Maps:
     def __init__(self):
         self._getSearchClient()
 
-    def geocode(self, query: str):
+    def geocode(self, query: str) -> Coords | None:
         """Convert an address or place name to geographic coordinates.
 
         Args:
@@ -54,7 +54,7 @@ class Maps:
                 longitude = coordinates[0]
                 latitude = coordinates[1]
 
-                print(longitude, latitude)
+                return {"lat": latitude, "lon": longitude}
             else:
                 print("No results")
 
@@ -66,15 +66,15 @@ class Maps:
     def poi(
         self,
         query: str,
-        countrySet: list[str] | None = None,
         coords: Coords | None = None,
+        countrySet: list[str] | None = None,
     ) -> List[Any]:
         """Search for points of interest matching a query.
 
         Args:
             query: Search query for the point of interest (e.g., business name)
-            countrySet: Optional list of country codes to limit search (e.g., ["US"])
             coords: Optional coordinates to center the search around
+            countrySet: Optional list of country codes to limit search (e.g., ["US"])
 
         Returns:
             List of POI results containing location and business information
@@ -127,7 +127,9 @@ class Maps:
 def main():
     """Example usage of the Maps client to search for a specific business."""
     maps = Maps()
-    maps.poi("Von's 1000Spirits", ["US"], {"lat": 47.606209, "lon": -122.332069})
+    query = "Vans, Seattle"
+    coords = Maps().geocode("Vans, Seattle")
+    maps.poi(query, coords)
 
 
 if __name__ == "__main__":
