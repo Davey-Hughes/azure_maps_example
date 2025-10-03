@@ -1,28 +1,56 @@
-### Installation
-I used [uv](https://docs.astral.sh/uv/).
-If you install uv, it is as simple as running `uv sync` to sync the installed
-packages from the `pyproject.toml` file.
+# Azure Maps Search Client
 
-Then source the virtual environment using a command such as `source
-./venv/bin/activate`
+A Python client for searching points of interest (POI) and geocoding addresses using Azure Maps API.
 
-### Usage
-Make sure to follow the installation steps.
+## Features
 
-Copy the `env_template` file to a file called `.env` and add your Azure Maps
-key [like in this
-documentation](https://learn.microsoft.com/en-us/azure/azure-maps/how-to-dev-guide-py-sdk#using-a-subscription-key-credential).
+- **Geocoding**: Convert addresses to geographic coordinates
+- **POI Search**: Search for businesses and points of interest with optional filters
+- **Opening Hours**: Retrieve opening hours information for the next seven days
 
-For more information about setting up Azure Maps, you can follow the [Azure
-Maps
-demo](https://learn.microsoft.com/en-us/azure/azure-maps/quick-demo-map-app#create-an-azure-maps-account).
+## Installation
 
-Run `python main.py`
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
-### Notes
-(The documentation here)[https://learn.microsoft.com/en-us/rest/api/maps/search/get-search-poi?view=rest-maps-1.0&tabs=HTTP] shows which data can be sent and returned for the POI request.
+1. Install uv (if not already installed)
+2. Sync dependencies from `pyproject.toml`:
+   ```bash
+   uv sync
+   ```
+3. Activate the virtual environment:
+   ```bash
+   source ./venv/bin/activate
+   ```
 
-It is important to send the country and {lat, lon} (I'm not sure if country is
-really needed if {lat, lon} are specified). Otherwise you will get random
-results from around the entire world. I am not sure if using this geocode
-function to get the {lat, lon} is better, but it seems to give better results.
+## Configuration
+
+1. Copy the environment template:
+   ```bash
+   cp env_template .env
+   ```
+
+2. Add your Azure Maps subscription key to `.env`:
+   ```
+   SUBSCRIPTION_KEY=your_azure_maps_key_here
+   ```
+
+### Getting Azure Maps Credentials
+
+- [Subscription Key Setup Guide](https://learn.microsoft.com/en-us/azure/azure-maps/how-to-dev-guide-py-sdk#using-a-subscription-key-credential)
+- [Azure Maps Account Creation](https://learn.microsoft.com/en-us/azure/azure-maps/quick-demo-map-app#create-an-azure-maps-account)
+
+## Usage
+
+Run the example script:
+```bash
+python main.py
+```
+
+### API Reference
+
+See the [POI Search API documentation](https://learn.microsoft.com/en-us/rest/api/maps/search/get-search-poi?view=rest-maps-1.0&tabs=HTTP) for available request parameters and response data.
+
+## Important Notes
+
+- **Location Filtering**: For accurate results, provide both `countrySet` and `coords` parameters. Without these, you may receive results from anywhere in the world.
+- **Best Practices**: Use the `geocode()` method first to get precise coordinates for your search area, which typically yields better POI search results.
