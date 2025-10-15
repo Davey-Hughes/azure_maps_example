@@ -17,6 +17,7 @@ import json
 import os
 import threading
 from queue import Queue
+from typing import Annotated
 from urllib.parse import urlparse
 
 import googlemaps
@@ -79,10 +80,10 @@ def worker(
                         "address": place_details.get("formatted_address"),
                         "phone": place_details.get("formatted_phone_number"),
                         "url": place_details.get("url"),
-                        "hours": json.dumps(place_details.get("opening_hours")),
                         "summary": place_details.get("editorial_summary", {}).get(
                             "overview"
                         ),
+                        "hours": json.dumps(place_details.get("opening_hours")),
                     }
                 )
         finally:
@@ -90,7 +91,9 @@ def worker(
             inputq.task_done()
 
 
-def main(input_file: str, output_file: str, num_rows: int = -1) -> None:
+def main(
+    input_file: str, output_file: str, num_rows: Annotated[int, typer.Argument()] = -1
+) -> None:
     """
     Main function to enrich facility data with Google Maps information.
 
@@ -119,8 +122,8 @@ def main(input_file: str, output_file: str, num_rows: int = -1) -> None:
             "address": str,
             "phone": str,
             "url": str,
-            "hours": str,
             "summary": str,
+            "hours": str,
         }
     )
 
