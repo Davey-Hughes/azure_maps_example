@@ -1,4 +1,5 @@
 .env
+*.xlsx
 
 # Python-generated files
 __pycache__/

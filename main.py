@@ -7,6 +7,7 @@ from azure.core.credentials import AzureKeyCredential
 from azure.core.exceptions import HttpResponseError
 from azure.maps.search import MapsSearchClient
 
+
 from dotenv import load_dotenv
 
 _ = load_dotenv()
@@ -24,7 +25,7 @@ class Coords(TypedDict):
     lon: float
 
 
-class Maps:
+class AzureMaps:
     """Client for interacting with Azure Maps search services.
 
     Provides methods for geocoding addresses and searching for points of interest (POI).
@@ -126,9 +127,9 @@ class Maps:
 
 def main():
     """Example usage of the Maps client to search for a specific business."""
-    maps = Maps()
+    maps = AzureMaps()
     query = "Vans, Seattle"
-    coords = Maps().geocode("Vans, Seattle")
+    coords = AzureMaps().geocode("Vans, Seattle")
     maps.poi(query, coords)
 
 
