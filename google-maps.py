@@ -16,23 +16,28 @@ Requirements:
     - Python packages: polars, typer, requests, python-dotenv
 
 Usage:
-    python google-maps.py <input_file> <output_file> [num_rows]
+    python google-maps.py <input_file> <output_file> [num_rows] [--rate-limit RATE]
 
     Arguments:
         input_file: Path to input Excel file with facility data
         output_file: Path to output Excel file for enriched data
         num_rows: Optional number of rows to process (default: -1 for all rows)
 
-    Example:
+    Options:
+        --rate-limit: Maximum API requests per minute (default: 60, 0 for unlimited)
+
+    Examples:
         python google-maps.py facilities.xlsx enriched_facilities.xlsx
         python google-maps.py facilities.xlsx enriched_facilities.xlsx 50
+        python google-maps.py facilities.xlsx enriched_facilities.xlsx --rate-limit 30
+        python google-maps.py facilities.xlsx enriched_facilities.xlsx 100 --rate-limit 45
 """
 
 from collections import deque
 import json
 import os
-from pprint import pprint
 import threading
+import time
 from queue import Queue
 from typing import Annotated, TypedDict
 from urllib.parse import urlparse
@@ -47,6 +52,47 @@ _ = load_dotenv()
 
 # Number of concurrent worker threads for API requests
 NUM_THREADS = 4
+
+
+class RateLimiter:
+    """Thread-safe rate limiter for API requests.
+
+    Controls the rate of requests by enforcing a minimum time interval
+    between consecutive requests across multiple threads.
+
+    Attributes:
+        requests_per_minute: Maximum number of requests allowed per minute
+        min_interval: Minimum time interval between requests in seconds
+        last_request_time: Timestamp of the last request
+        lock: Threading lock for thread-safe operation
+    """
+
+    def __init__(self, requests_per_minute: int):
+        """Initialize the rate limiter.
+
+        Args:
+            requests_per_minute: Maximum number of requests allowed per minute
+        """
+        self.requests_per_minute = requests_per_minute
+        self.min_interval = 60.0 / requests_per_minute if requests_per_minute > 0 else 0
+        self.last_request_time = 0.0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        """Block until enough time has passed to make the next request.
+
+        Ensures that requests are spaced out according to the configured rate limit.
+        This method is thread-safe and can be called from multiple worker threads.
+        """
+        with self.lock:
+            current_time = time.time()
+            time_since_last_request = current_time - self.last_request_time
+
+            if time_since_last_request < self.min_interval:
+                sleep_time = self.min_interval - time_since_last_request
+                time.sleep(sleep_time)
+
+            self.last_request_time = time.time()
 
 
 class Coords(TypedDict):
@@ -153,6 +199,7 @@ def worker(
     df: pl.DataFrame,
     inputq: Queue,
     outputq: Queue,
+    rate_limiter: RateLimiter | None = None,
 ) -> None:
     """Worker thread that processes facility queries and fetches Google Maps data.
 
@@ -169,6 +216,7 @@ def worker(
         inputq: Queue containing dicts with 'query_list' (deque of query strings)
             and 'oid' (facility ID) keys
         outputq: Queue for storing enriched place data results as dictionaries
+        rate_limiter: Optional rate limiter to control API request frequency
 
     Note:
         Each item from inputq contains a deque of queries to try in order,
@@ -179,6 +227,10 @@ def worker(
             item = inputq.get(block=False)
             query = item["query_list"].popleft()
             print(f"Processing {item['oid']}: {query}")
+
+            # Wait for rate limiter before making API request
+            if rate_limiter:
+                rate_limiter.wait()
 
             # Search for the place using text query
             place_results = gmaps.text_search(
@@ -218,7 +270,7 @@ def worker(
                 )
 
             else:
-                print(f"No results found for {query}: {place_results}")
+                print(f"No results found for {query}")
                 if item["query_list"]:
                     inputq.put(item)
         finally:
@@ -227,7 +279,12 @@ def worker(
 
 
 def main(
-    input_file: str, output_file: str, num_rows: Annotated[int, typer.Argument()] = -1
+    input_file: str,
+    output_file: str,
+    num_rows: Annotated[int, typer.Argument()] = -1,
+    rate_limit: Annotated[
+        int, typer.Option(help="Maximum requests per minute (0 for unlimited)")
+    ] = 500,
 ) -> None:
     """Main function to enrich facility data with Google Maps information.
 
@@ -247,6 +304,7 @@ def main(
             Expected columns: OID, facility_url, facility_name
         output_file: Path to output Excel file for enriched data
         num_rows: Number of rows to process from input file (default: -1 for all)
+        rate_limit: Maximum number of API requests per minute (default: 60, 0 for unlimited)
 
     Raises:
         KeyError: If GOOGLE_MAPS_API_KEY environment variable is not set
@@ -256,6 +314,11 @@ def main(
     """
     # Initialize Google Maps client with API key
     gmaps = GoogleMaps(os.environ["GOOGLE_MAPS_API_KEY"])
+
+    # Initialize rate limiter
+    rate_limiter = RateLimiter(rate_limit) if rate_limit > 0 else None
+    if rate_limiter:
+        print(f"Rate limit: {rate_limit} requests per minute")
 
     # Read input Excel file
     df = pl.read_excel(input_file)
@@ -297,7 +360,9 @@ def main(
     # Create and start worker threads
     threads = []
     for i in range(NUM_THREADS):
-        thread = threading.Thread(target=worker, args=(gmaps, df, inputq, outputq))
+        thread = threading.Thread(
+            target=worker, args=(gmaps, df, inputq, outputq, rate_limiter)
+        )
         thread.start()
         threads.append(thread)
 
