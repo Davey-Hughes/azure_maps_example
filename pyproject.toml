@@ -8,7 +8,6 @@ dependencies = [
   "azure-identity>=1.25.0",
   "azure-maps-search>=2.0.0b2",
   "fastexcel>=0.16.0",
-  "googlemaps>=4.10.0",
   "polars>=1.34.0",
   "python-dotenv>=1.1.1",
   "requests>=2.32.5",

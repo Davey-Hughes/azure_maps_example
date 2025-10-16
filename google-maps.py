@@ -5,22 +5,39 @@ This script enriches facility data from an Excel file by fetching additional
 information from Google Maps Places API. It uses multithreading to process
 multiple facilities concurrently.
 
+The script queries Google Maps using facility URLs (hostname) and/or facility
+names, retrieving details such as address, phone number, website, opening hours,
+and AI-generated summaries. Results are merged with the original data and
+exported to Excel.
+
 Requirements:
     - GOOGLE_MAPS_API_KEY environment variable (loaded from .env file)
     - Input Excel file with columns: OID, facility_url, facility_name
+    - Python packages: polars, typer, requests, python-dotenv
 
 Usage:
-    python google-maps.py <input_file> <output_file>
+    python google-maps.py <input_file> <output_file> [num_rows]
+
+    Arguments:
+        input_file: Path to input Excel file with facility data
+        output_file: Path to output Excel file for enriched data
+        num_rows: Optional number of rows to process (default: -1 for all rows)
+
+    Example:
+        python google-maps.py facilities.xlsx enriched_facilities.xlsx
+        python google-maps.py facilities.xlsx enriched_facilities.xlsx 50
 """
 
+from collections import deque
 import json
 import os
+from pprint import pprint
 import threading
 from queue import Queue
-from typing import Annotated
+from typing import Annotated, TypedDict
 from urllib.parse import urlparse
+import requests
 
-import googlemaps
 import polars as pl
 import typer
 from dotenv import load_dotenv
@@ -32,60 +49,178 @@ _ = load_dotenv()
 NUM_THREADS = 4
 
 
+class Coords(TypedDict):
+    """Type definition for geographic coordinates.
+
+    Attributes:
+        lat: Latitude in decimal degrees
+        lon: Longitude in decimal degrees
+    """
+
+    lat: float
+    lon: float
+
+
+class GoogleMaps:
+    """Client for interacting with Google Maps Places API.
+
+    Attributes:
+        api_key: Google Maps API key for authentication
+    """
+
+    api_key: str
+
+    def __init__(self, api_key: str):
+        """Initialize the Google Maps client.
+
+        Args:
+            api_key: Google Maps API key
+        """
+        self.api_key = api_key
+
+    def text_search(
+        self,
+        query: str,
+        coords: Coords | None = None,
+        max_results: int = 1,
+        field_mask: list[str] = ["places.id"],
+    ):
+        """Search for places using a text query.
+
+        Performs a text-based search for places, optionally biased toward a
+        geographic location. The query is automatically scoped to Colorado Springs.
+
+        Args:
+            query: Text search query (e.g., business name or URL hostname)
+            coords: Optional geographic coordinates to bias search results
+            max_results: Maximum number of results to return (default: 1)
+            field_mask: List of place fields to retrieve (default: ["places.id"])
+
+        Returns:
+            dict: JSON response from Google Maps Places API containing place data
+        """
+        location_bias = (
+            {
+                "circle": {
+                    "center": {
+                        "latitude": coords["lat"],
+                        "longitude": coords["lon"],
+                    },
+                    "radius": 50000.0,
+                }
+            }
+            if coords
+            else None
+        )
+
+        return requests.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            json={
+                "textQuery": f"{query} in Colorado Springs",
+                "maxResultCount": max_results,
+                "locationBias": location_bias,
+            },
+            headers={
+                "X-Goog-Api-Key": self.api_key,
+                "X-Goog-FieldMask": ",".join(field_mask),
+            },
+        ).json()
+
+    def place_details(self, id: str, field_mask: list[str]):
+        """Fetch detailed information for a specific place by ID.
+
+        Note: This method is not currently used since text_search can retrieve
+        all needed details directly with an appropriate field mask.
+
+        Args:
+            id: Google Maps place ID
+            field_mask: List of place fields to retrieve
+
+        Returns:
+            dict: JSON response containing place details
+        """
+        return requests.get(
+            f"https://places.googleapis.com/v1/places/{id}",
+            headers={
+                "X-Goog-Api-Key": self.api_key,
+                "X-Goog-FieldMask": ",".join(field_mask),
+            },
+        ).json()
+
+
 def worker(
-    gmaps: googlemaps.Client,
+    gmaps: GoogleMaps,
     df: pl.DataFrame,
     inputq: Queue,
     outputq: Queue,
 ) -> None:
-    """
-    Worker thread that processes facility queries and fetches Google Maps data.
+    """Worker thread that processes facility queries and fetches Google Maps data.
 
     Continuously pulls items from the input queue, queries the Google Maps API
     for place information, and pushes enriched results to the output queue.
 
+    The worker implements a fallback mechanism: if the initial query (typically
+    the URL hostname) returns no results and a facility name is available, it
+    will retry with the facility name.
+
     Args:
         gmaps: Initialized Google Maps client
         df: Input DataFrame (unused, kept for signature compatibility)
-        inputq: Queue containing dicts with 'query_string' and 'oid' keys
-        outputq: Queue for storing enriched place data results
+        inputq: Queue containing dicts with 'query_list' (deque of query strings)
+            and 'oid' (facility ID) keys
+        outputq: Queue for storing enriched place data results as dictionaries
+
+    Note:
+        Each item from inputq contains a deque of queries to try in order,
+        allowing fallback from URL hostname to facility name if needed.
     """
     while not inputq.empty():
         try:
             item = inputq.get(block=False)
-            print(f"Processing {item['oid']}: {item['query_string']}")
+            query = item["query_list"].popleft()
+            print(f"Processing {item['oid']}: {query}")
 
             # Search for the place using text query
-            place = gmaps.find_place(item["query_string"], input_type="textquery")
+            place_results = gmaps.text_search(
+                query,
+                # {"lat": 38.8407721, "lon": -104.8244929},
+                field_mask=[
+                    "places.id",
+                    "places.displayName",
+                    "places.formattedAddress",
+                    "places.regularOpeningHours",
+                    "places.nationalPhoneNumber",
+                    "places.websiteUri",
+                    "places.googleMapsUri",
+                    "places.editorialSummary",
+                    "places.generativeSummary",
+                ],
+            )
 
             # If a candidate is found, fetch detailed information
-            if place["candidates"]:
-                place_details = gmaps.place(
-                    place["candidates"][0]["place_id"],
-                    fields=[
-                        "name",
-                        "formatted_address",
-                        "formatted_phone_number",
-                        "opening_hours",
-                        "url",
-                        "editorial_summary",
-                    ],
-                )["result"]
+            if place_results and "places" in place_results:
+                place_details = place_results["places"][0]
 
                 # Extract and structure the place details
                 outputq.put(
                     {
                         "OID": item["oid"],
-                        "name": place_details.get("name"),
-                        "address": place_details.get("formatted_address"),
-                        "phone": place_details.get("formatted_phone_number"),
-                        "url": place_details.get("url"),
-                        "summary": place_details.get("editorial_summary", {}).get(
-                            "overview"
-                        ),
-                        "hours": json.dumps(place_details.get("opening_hours")),
+                        "name": place_details.get("displayName")["text"],
+                        "address": place_details.get("formattedAddress"),
+                        "phone": place_details.get("nationalPhoneNumber"),
+                        "url": place_details.get("websiteUri"),
+                        "googleMapsUri": place_details.get("googleMapsUri"),
+                        "summary": place_details.get("editorialSummary", {})
+                        .get("generativeSummary", {})
+                        .get("overview"),
+                        "hours": json.dumps(place_details.get("regularOpeningHours")),
                     }
                 )
+
+            else:
+                print(f"No results found for {query}: {place_results}")
+                if item["query_list"]:
+                    inputq.put(item)
         finally:
             # Mark task as done even if an exception occurred
             inputq.task_done()
@@ -94,22 +229,33 @@ def worker(
 def main(
     input_file: str, output_file: str, num_rows: Annotated[int, typer.Argument()] = -1
 ) -> None:
-    """
-    Main function to enrich facility data with Google Maps information.
+    """Main function to enrich facility data with Google Maps information.
 
     Reads an Excel file containing facility data, queries Google Maps API
     for additional information using multithreading, and writes the enriched
     data to an output Excel file.
 
+    The enrichment process:
+    1. Reads input Excel file with facility data
+    2. Creates work queue with facility queries (URL hostname and/or name)
+    3. Spawns worker threads to process queries concurrently
+    4. Collects enriched data including address, phone, hours, and summaries
+    5. Merges enriched data with original data and exports to Excel
+
     Args:
         input_file: Path to input Excel file with facility data
+            Expected columns: OID, facility_url, facility_name
         output_file: Path to output Excel file for enriched data
+        num_rows: Number of rows to process from input file (default: -1 for all)
 
     Raises:
         KeyError: If GOOGLE_MAPS_API_KEY environment variable is not set
+
+    Example:
+        main("facilities.xlsx", "enriched.xlsx", num_rows=100)
     """
     # Initialize Google Maps client with API key
-    gmaps = googlemaps.Client(key=os.environ["GOOGLE_MAPS_API_KEY"])
+    gmaps = GoogleMaps(os.environ["GOOGLE_MAPS_API_KEY"])
 
     # Read input Excel file
     df = pl.read_excel(input_file)
@@ -122,6 +268,7 @@ def main(
             "address": str,
             "phone": str,
             "url": str,
+            "googleMapsUri": str,
             "summary": str,
             "hours": str,
         }
@@ -138,10 +285,14 @@ def main(
         url = urlparse(row["facility_url"])
         name = row["facility_name"]
 
-        # Use domain name if available, otherwise use facility name
-        query = url.hostname if url.hostname else name
+        queries = deque([])
+        if url.hostname:
+            queries.append(url.hostname)
 
-        inputq.put({"query_string": query, "oid": oid})
+        if name:
+            queries.append(name)
+
+        inputq.put({"query_list": queries, "oid": oid})
 
     # Create and start worker threads
     threads = []
