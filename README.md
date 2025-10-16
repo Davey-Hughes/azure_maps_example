@@ -47,11 +47,11 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ## Usage
 
-### Azure Maps Search (main.py)
+### Azure Maps Search (azure-maps.py)
 
 Run the example script:
 ```bash
-python main.py
+python azure-maps.py
 ```
 
 #### API Reference
@@ -107,5 +107,6 @@ The script uses 4 concurrent threads by default. You can adjust this by modifyin
 
 - **Location Filtering**: For accurate results, provide both `countrySet` and `coords` parameters. Without these, you may receive results from anywhere in the world.
 - **Best Practices**: Use the `geocode()` method first to get precise coordinates for your search area, which typically yields better POI search results.
+
 
 
